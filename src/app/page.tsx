@@ -1,1 +1,18 @@
-import Link from 'next/link'; import {ShieldCheck,MessageCircleHeart,ArrowRight} from 'lucide-react'; export default function Home(){return <main className="min-h-screen p-6 md:p-12"><nav className="mx-auto max-w-6xl flex items-center justify-between"><b className="text-xl">✦ Lumen</b><div className="flex gap-3"><Link className="px-4 py-2 text-sm" href="/login">Sign in</Link><Link className="rounded-xl bg-brand px-4 py-2 text-sm text-white" href="/register">Get started</Link></div></nav><section className="mx-auto max-w-4xl text-center pt-28"><p className="text-brand font-semibold text-sm">PRIVATE, FRIEND-FIRST MESSAGING</p><h1 className="mt-5 text-5xl md:text-7xl font-semibold tracking-tight">Your people.<br/><span className="text-brand">Your space.</span></h1><p className="max-w-xl mx-auto mt-6 text-lg text-muted">Lumen keeps one-to-one conversations intentional, protected, and delightfully simple.</p><Link className="inline-flex items-center gap-2 mt-9 rounded-xl bg-brand px-5 py-3 text-white font-medium" href="/register">Start a conversation <ArrowRight size={18}/></Link></section><section className="mx-auto max-w-3xl grid md:grid-cols-2 gap-4 mt-24"><Feature icon={<ShieldCheck/>} title="Private by design" text="Chat only with accepted friends, with authorization enforced at every layer."/><Feature icon={<MessageCircleHeart/>} title="Made for connection" text="Quietly polished tools for messages, media, voice notes, and more."/></section></main>}; function Feature(p:{icon:React.ReactNode,title:string,text:string}){return <div className="rounded-2xl bg-surface border border-line p-6"><div className="text-brand">{p.icon}</div><h2 className="font-semibold mt-3">{p.title}</h2><p className="text-muted text-sm mt-2">{p.text}</p></div>}
+'use client';
+
+import React from 'react';
+import { useVault } from '@/components/stealth/VaultContext';
+import { LudoGameView } from '@/components/game/LudoGameView';
+import { ChatDashboard } from '@/components/chat/ChatDashboard';
+
+export default function RootPage() {
+  const { isVaultUnlocked } = useVault();
+
+  // If Vault is locked, render the full authentic Ludo Game disguise
+  if (!isVaultUnlocked) {
+    return <LudoGameView />;
+  }
+
+  // Once unlocked via Secret PIN or Gesture, show the real Lumen Secret Chat
+  return <ChatDashboard />;
+}

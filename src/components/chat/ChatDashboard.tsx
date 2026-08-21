@@ -38,6 +38,7 @@ import { VoiceRecorder } from './VoiceRecorder';
 import { AutoDeleteModal } from './AutoDeleteModal';
 import { MediaViewerModal } from './MediaViewerModal';
 import { getStorageFileUrl } from '@/lib/insforge/storage';
+import { useVault } from '@/components/stealth/VaultContext';
 
 function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
   const map = new Map<string, Message>();
@@ -69,6 +70,7 @@ export function ChatDashboard() {
   const [showAutoDeleteModal, setShowAutoDeleteModal] = useState(false);
   const [mediaViewer, setMediaViewer] = useState<{ url: string; type: 'image' | 'video'; fileName?: string } | null>(null);
   const [isOtherTyping, setIsOtherTyping] = useState(false);
+  const { lockVault } = useVault();
 
   // Load user profile and conversation list
   const loadConversations = async (myProfile: Profile) => {
@@ -306,6 +308,14 @@ export function ChatDashboard() {
             </div>
 
             <div className="flex items-center gap-1">
+              <button
+                onClick={lockVault}
+                title="Panic Lock: Switch to Ludo Game"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-rose-400 border border-slate-700/80 text-xs font-semibold transition"
+              >
+                <span>🎲</span>
+                <span className="hidden sm:inline">Panic</span>
+              </button>
               <Link
                 href="/friends"
                 title="Find Friends"
@@ -473,13 +483,14 @@ export function ChatDashboard() {
           {active && me ? (
             <ChatView
               convo={active}
-              me={me}
+              me={me!}
               messages={messages}
               setMessages={setMessages}
               back={() => setActive(null)}
               onOpenAutoDelete={() => setShowAutoDeleteModal(true)}
               onOpenMedia={(url, type, fileName) => setMediaViewer({ url, type, fileName })}
               isOtherTyping={isOtherTyping}
+              onPanicLock={lockVault}
             />
           ) : (
             <div className="m-auto max-w-sm text-center p-8 space-y-4">
@@ -569,6 +580,7 @@ function ChatView({
   onOpenAutoDelete,
   onOpenMedia,
   isOtherTyping,
+  onPanicLock,
 }: {
   convo: Conversation;
   me: Profile;
@@ -578,6 +590,7 @@ function ChatView({
   onOpenAutoDelete: () => void;
   onOpenMedia: (url: string, type: 'image' | 'video', fileName?: string) => void;
   isOtherTyping: boolean;
+  onPanicLock?: () => void;
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -821,6 +834,18 @@ function ChatView({
 
         {/* Header Action Buttons */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Panic Lock Button */}
+          {onPanicLock && (
+            <button
+              onClick={onPanicLock}
+              title="Panic Lock: Switch to Ludo Game"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-rose-400 border border-slate-700/80 text-xs font-semibold transition"
+            >
+              <span>🎲</span>
+              <span className="hidden sm:inline">Panic</span>
+            </button>
+          )}
+
           {/* Disappearing Timer Button */}
           <button
             onClick={onOpenAutoDelete}
