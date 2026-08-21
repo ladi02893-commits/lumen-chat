@@ -26,7 +26,7 @@ import {
   Check,
   Trophy,
   Play,
-  ArrowLeft,
+  LogOut,
   Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -100,7 +100,7 @@ export function LudoGameView() {
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [centerTapCount, setCenterTapCount] = useState(0);
   const [winner, setWinner] = useState<PlayerColor | null>(null);
-  const [gameLog, setGameLog] = useState<string>('Match started! Roll dice to play.');
+  const [gameLog, setGameLog] = useState<string>('Match started! Red player rolls first.');
   const [turnTimeLeft, setTurnTimeLeft] = useState<number>(15);
 
   // Online Multiplayer State
@@ -122,6 +122,19 @@ export function LudoGameView() {
 
   const logMessage = (msg: string) => {
     setGameLog(msg);
+  };
+
+  // Exit match and return to lobby
+  const exitToLobby = () => {
+    if (gameMode === 'online') {
+      ludoOnline.leaveRoom();
+    }
+    setGameState('lobby');
+    setOnlineRoomCode(null);
+    setIsRolling(false);
+    setIsAnimatingMove(false);
+    setMovingTokenId(null);
+    toast.info('Returned to Game Lobby');
   };
 
   // Start match from Lobby
@@ -146,7 +159,7 @@ export function LudoGameView() {
     setWinner(null);
     setTurnTimeLeft(15);
     setGameState('playing');
-    logMessage('Match started! Red player rolls the dice.');
+    logMessage('Match started! Red rolls the dice.');
   };
 
   // Reset Game
@@ -185,14 +198,25 @@ export function LudoGameView() {
     toast.success('Ludo Arena match reset!');
   };
 
-  // Turn timer countdown
+  // Switch turn
+  const nextTurn = useCallback(() => {
+    setHasRolled(false);
+    setTurnTimeLeft(15);
+    const currentIdx = playerOrder.indexOf(activePlayer);
+    const nextPlayer = playerOrder[(currentIdx + 1) % playerOrder.length];
+    setActivePlayer(nextPlayer);
+  }, [activePlayer, playerOrder]);
+
+  // Turn timer countdown (only active for current player's own turn)
   useEffect(() => {
     if (gameState !== 'playing' || winner || isRolling || isAnimatingMove) return;
 
     const timer = setInterval(() => {
       setTurnTimeLeft((prev) => {
         if (prev <= 1) {
-          if (gameMode !== 'online' || activePlayer === myOnlineColor) {
+          // If it's my turn, auto roll or pass
+          const isMyTurn = gameMode !== 'online' || activePlayer === myOnlineColor;
+          if (isMyTurn) {
             if (!hasRolled) {
               rollDice();
             } else {
@@ -206,16 +230,7 @@ export function LudoGameView() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [gameState, activePlayer, hasRolled, isRolling, isAnimatingMove, winner, gameMode, myOnlineColor]);
-
-  // Switch turn
-  const nextTurn = useCallback(() => {
-    setHasRolled(false);
-    setTurnTimeLeft(15);
-    const currentIdx = playerOrder.indexOf(activePlayer);
-    const nextPlayer = playerOrder[(currentIdx + 1) % playerOrder.length];
-    setActivePlayer(nextPlayer);
-  }, [activePlayer, playerOrder]);
+  }, [gameState, activePlayer, hasRolled, isRolling, isAnimatingMove, winner, gameMode, myOnlineColor, nextTurn]);
 
   // Check if token can move
   const canMoveToken = useCallback(
@@ -365,7 +380,7 @@ export function LudoGameView() {
           }
         }
 
-        const allHome = player.tokens.every((t) => t.status === 'home');
+        const allHome = player.tokens.every((t: Token) => t.status === 'home');
         if (allHome) {
           setWinner(player.color);
           ludoAudio.playVictoryFanfare();
@@ -401,6 +416,12 @@ export function LudoGameView() {
   // Roll Dice Action (Local action)
   const rollDice = useCallback(() => {
     if (gameState !== 'playing' || isRolling || hasRolled || isAnimatingMove) return;
+
+    // In online mode, you can only roll on your turn
+    if (gameMode === 'online' && activePlayer !== myOnlineColor) {
+      toast.info("Wait for your opponent's turn");
+      return;
+    }
 
     setIsRolling(true);
     ludoAudio.playDiceRoll();
@@ -456,6 +477,7 @@ export function LudoGameView() {
     gameMode,
     onlineRoomCode,
     activePlayer,
+    myOnlineColor,
     isHost,
     players,
     nextTurn,
@@ -492,7 +514,7 @@ export function LudoGameView() {
       // Remote Player Rolled Dice
       if (action.type === 'ROLL') {
         const rolled = action.payload.value;
-        const rollSender: PlayerColor = action.senderColor as PlayerColor;
+        const rollSender: PlayerColor = (action.payload.playerColor as PlayerColor) || action.senderColor;
         setActivePlayer(rollSender);
         setDiceValue(rolled);
         setIsRolling(true);
@@ -501,6 +523,7 @@ export function LudoGameView() {
         setTimeout(() => {
           setIsRolling(false);
           setHasRolled(true);
+          setTurnTimeLeft(15);
           const pName = players[rollSender]?.name || action.senderName;
           logMessage(`🎲 ${pName} rolled a ${rolled}!`);
 
@@ -671,6 +694,10 @@ export function LudoGameView() {
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  // Check if current device is allowed to roll right now
+  const isMyTurnToRoll =
+    gameMode === 'online' ? activePlayer === myOnlineColor : !players[activePlayer].isAI;
+
   // ==========================================
   // VIEW 1: LUDO ARENA LOBBY (GAME START SCREEN)
   // ==========================================
@@ -797,38 +824,39 @@ export function LudoGameView() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-[#070b14] to-black text-slate-100 flex flex-col justify-between p-2 sm:p-3 md:p-5 select-none font-sans">
       <header className="max-w-4xl w-full mx-auto flex items-center justify-between py-2 px-3 sm:px-4 rounded-2xl bg-slate-900/85 border border-slate-800 backdrop-blur-md shadow-2xl">
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
+          {/* 🚪 Prominent EXIT MATCH Button */}
           <button
             type="button"
-            onClick={() => setGameState('lobby')}
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition flex items-center gap-1 text-xs font-semibold"
-            title="Return to Game Lobby"
+            onClick={exitToLobby}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 hover:text-white border border-rose-500/40 text-xs font-bold transition active:scale-95 shadow-sm"
+            title="Exit this Match and return to Lobby"
           >
-            <ArrowLeft size={16} />
-            <span className="hidden sm:inline">Lobby</span>
+            <LogOut size={14} />
+            <span>Exit Game</span>
           </button>
 
           <div>
-            <h1 className="font-bold text-sm sm:text-base tracking-tight text-white flex items-center gap-2">
-              Ludo Arena 3D
+            <h1 className="font-bold text-xs sm:text-sm tracking-tight text-white flex items-center gap-1.5">
+              Ludo Arena
               {gameMode === 'online' ? (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-bold border border-amber-500/30 flex items-center gap-1">
                   <Globe size={11} /> 2P Table #{onlineRoomCode}
                 </span>
               ) : (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/30">
-                  {gameMode === 'ai' ? 'vs AI Match' : '2P Local'}
+                  {gameMode === 'ai' ? 'vs AI' : '2P Local'}
                 </span>
               )}
             </h1>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {gameMode === 'online' && onlineRoomCode && (
             <button
               onClick={copyActiveRoomCode}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-mono font-bold border border-slate-700 transition"
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-mono font-bold border border-slate-700 transition"
               title="Copy Table Code"
             >
               {copiedCode ? <Check size={14} /> : <Copy size={14} />}
@@ -997,16 +1025,20 @@ export function LudoGameView() {
               (gameMode === 'online' && activePlayer !== myOnlineColor)
             }
             playerColor={activePlayer}
+            isMyTurn={isMyTurnToRoll}
+            hasRolled={hasRolled}
             onRoll={() => rollDice()}
             onSecretTrigger={() => setIsPinModalOpen(true)}
           />
 
+          {/* Exit / Return to Lobby Button */}
           <button
             type="button"
-            onClick={() => setGameState('lobby')}
-            className="w-full py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400 hover:text-white transition font-medium"
+            onClick={exitToLobby}
+            className="w-full py-2.5 rounded-xl bg-slate-800/80 hover:bg-rose-500/20 text-xs text-rose-300 hover:text-white border border-slate-700/80 hover:border-rose-500/40 transition font-semibold flex items-center justify-center gap-1.5"
           >
-            ← Exit to Lobby
+            <LogOut size={14} />
+            <span>Exit Game (Return to Lobby)</span>
           </button>
         </div>
       </main>
@@ -1057,10 +1089,10 @@ export function LudoGameView() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setGameState('lobby')}
+                  onClick={exitToLobby}
                   className="px-4 h-11 rounded-2xl bg-slate-800 text-white font-semibold text-xs"
                 >
-                  Lobby
+                  Exit to Lobby
                 </button>
               </div>
             </motion.div>

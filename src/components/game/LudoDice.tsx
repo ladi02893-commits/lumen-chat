@@ -9,6 +9,8 @@ interface LudoDiceProps {
   isRolling: boolean;
   disabled?: boolean;
   playerColor: 'red' | 'green' | 'yellow' | 'blue';
+  isMyTurn?: boolean;
+  hasRolled?: boolean;
   onRoll: () => void;
   onSecretTrigger?: () => void;
 }
@@ -18,6 +20,8 @@ export function LudoDice({
   isRolling,
   disabled = false,
   playerColor,
+  isMyTurn = true,
+  hasRolled = false,
   onRoll,
   onSecretTrigger,
 }: LudoDiceProps) {
@@ -28,28 +32,28 @@ export function LudoDice({
   const colorStyles = {
     red: {
       border: 'border-red-500',
-      glow: 'shadow-[0_0_25px_rgba(239,68,68,0.5)]',
+      glow: 'shadow-[0_0_30px_rgba(239,68,68,0.6)]',
       bg: 'from-red-600 to-rose-700',
       badge: 'bg-red-500 text-white',
       accent: '#ef4444',
     },
     green: {
       border: 'border-emerald-500',
-      glow: 'shadow-[0_0_25px_rgba(16,185,129,0.5)]',
+      glow: 'shadow-[0_0_30px_rgba(16,185,129,0.6)]',
       bg: 'from-emerald-600 to-teal-700',
       badge: 'bg-emerald-500 text-white',
       accent: '#10b981',
     },
     yellow: {
       border: 'border-amber-400',
-      glow: 'shadow-[0_0_25px_rgba(245,158,11,0.5)]',
+      glow: 'shadow-[0_0_30px_rgba(245,158,11,0.6)]',
       bg: 'from-amber-500 to-yellow-600',
       badge: 'bg-amber-400 text-slate-900',
       accent: '#f59e0b',
     },
     blue: {
       border: 'border-blue-500',
-      glow: 'shadow-[0_0_25px_rgba(59,130,246,0.5)]',
+      glow: 'shadow-[0_0_30px_rgba(59,130,246,0.6)]',
       bg: 'from-blue-600 to-indigo-700',
       badge: 'bg-blue-500 text-white',
       accent: '#3b82f6',
@@ -91,7 +95,7 @@ export function LudoDice({
 
     switch (num) {
       case 1:
-        return <div className={`size-5 ${centerDot} m-auto`} />;
+        return <div className={`size-5.5 ${centerDot} m-auto`} />;
       case 2:
         return (
           <div className="flex justify-between w-full h-full p-2.5">
@@ -138,12 +142,12 @@ export function LudoDice({
           </div>
         );
       default:
-        return <div className={`size-5 ${centerDot} m-auto`} />;
+        return <div className={`size-5.5 ${centerDot} m-auto`} />;
     }
   };
 
   return (
-    <div className="flex flex-col items-center gap-2.5 select-none">
+    <div className="flex flex-col items-center gap-2 select-none">
       <div className="relative">
         <motion.button
           type="button"
@@ -153,8 +157,8 @@ export function LudoDice({
           onMouseUp={cancelLongPress}
           onTouchStart={startLongPress}
           onTouchEnd={cancelLongPress}
-          whileHover={{ scale: disabled ? 1 : 1.05 }}
-          whileTap={{ scale: disabled ? 1 : 0.9 }}
+          whileHover={{ scale: disabled ? 1 : 1.06 }}
+          whileTap={{ scale: disabled ? 1 : 0.92 }}
           animate={
             isRolling
               ? {
@@ -162,25 +166,29 @@ export function LudoDice({
                   rotateY: [0, 90, 270, 450, 720],
                   rotateZ: [0, 45, 135, 225, 360],
                   scale: [1, 1.25, 0.95, 1.15, 1],
-                  y: [0, -20, 8, -12, 0],
+                  y: [0, -22, 8, -12, 0],
                 }
+              : !disabled
+              ? { scale: [1, 1.04, 1], y: [0, -3, 0] }
               : { rotateX: 0, rotateY: 0, rotateZ: 0, scale: 1, y: 0 }
           }
           transition={
             isRolling
               ? { duration: 0.65, ease: 'easeInOut' }
+              : !disabled
+              ? { repeat: Infinity, duration: 1.6, ease: 'easeInOut' }
               : { type: 'spring', stiffness: 450, damping: 25 }
           }
           className={`relative size-20 sm:size-22 md:size-24 rounded-3xl bg-gradient-to-b from-white via-slate-50 to-slate-200 border-4 ${
             currentTheme.border
           } ${
-            !disabled ? currentTheme.glow : 'opacity-60 grayscale-[50%]'
-          } shadow-2xl flex items-center justify-center cursor-pointer overflow-hidden`}
+            !disabled ? currentTheme.glow : 'opacity-50 grayscale-[60%]'
+          } shadow-2xl flex items-center justify-center cursor-pointer overflow-hidden transition-all`}
           style={{
             boxShadow:
-              'inset 0 3px 6px rgba(255,255,255,1), inset 0 -4px 8px rgba(0,0,0,0.2), 0 12px 28px rgba(0,0,0,0.5)',
+              'inset 0 3px 6px rgba(255,255,255,1), inset 0 -4px 8px rgba(0,0,0,0.2), 0 12px 30px rgba(0,0,0,0.6)',
           }}
-          title={disabled ? 'Wait for turn' : 'Tap to Roll Dice'}
+          title={disabled ? 'Wait for your turn' : 'Tap to Roll Dice!'}
         >
           {/* Specular glare */}
           <div className="absolute top-0 inset-x-0 h-3 bg-gradient-to-b from-white/90 to-transparent pointer-events-none" />
@@ -190,9 +198,9 @@ export function LudoDice({
             {renderDots(value || 6)}
           </div>
 
-          {/* Rolling blur effect */}
+          {/* Rolling blur overlay */}
           {isRolling && (
-            <div className="absolute inset-0 bg-white/30 backdrop-blur-[1px] animate-pulse pointer-events-none" />
+            <div className="absolute inset-0 bg-white/35 backdrop-blur-[1px] animate-pulse pointer-events-none" />
           )}
         </motion.button>
 
@@ -204,14 +212,26 @@ export function LudoDice({
         />
       </div>
 
-      {/* Turn indicator badge */}
-      <span
-        className={`px-3.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
-          currentTheme.badge
-        } shadow-md`}
-      >
-        {playerColor}&apos;s Turn {disabled ? '' : '(Tap Dice)'}
-      </span>
+      {/* Turn state prompt */}
+      <div className="text-center">
+        {hasRolled ? (
+          <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/25 text-amber-300 border border-amber-500/40 shadow-sm animate-pulse">
+            👆 Move a Token
+          </span>
+        ) : isMyTurn ? (
+          <span
+            className={`inline-block px-3.5 py-1 rounded-full text-xs font-extrabold uppercase tracking-wider ${
+              currentTheme.badge
+            } shadow-md animate-bounce`}
+          >
+            🎲 Your Turn (Tap!)
+          </span>
+        ) : (
+          <span className="px-3 py-1 rounded-full text-[11px] font-semibold bg-slate-800/80 text-slate-400 border border-slate-700/80 shadow-sm">
+            ⏳ Opponent&apos;s Turn...
+          </span>
+        )}
+      </div>
     </div>
   );
 }
