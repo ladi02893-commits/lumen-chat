@@ -210,10 +210,24 @@ export function ChatDashboard() {
 
         setMessages((prev) => mergeMessages(prev, validMsgs));
 
-        // Mark unviewed messages from friend as viewed & read
+        // Mark unviewed messages from friend as viewed & trigger auto-delete expiration
         const unreadFromOther = validMsgs.filter((x) => x.sender_id !== me.id && !x.viewed_at);
-        for (const msg of unreadFromOther) {
-          insforge.database.rpc('mark_message_viewed', { m_id: msg.id });
+        if (unreadFromOther.length > 0) {
+          for (const msg of unreadFromOther) {
+            insforge.database.rpc('mark_message_viewed', { m_id: msg.id });
+          }
+
+          if (active.auto_delete_mode === 'instant_after_view' || active.auto_delete_mode === '5m_after_view') {
+            const addSecs = active.auto_delete_mode === 'instant_after_view' ? 5 : 300;
+            const newExp = new Date(Date.now() + addSecs * 1000).toISOString();
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.sender_id !== me.id && !m.viewed_at
+                  ? { ...m, viewed_at: new Date().toISOString(), expires_at: newExp }
+                  : m
+              )
+            );
+          }
         }
 
         // Check if other user is typing
@@ -611,6 +625,22 @@ function ChatView({
     }
   }, [messages, isOtherTyping]);
 
+  // Live 1-second auto-delete timer cleaner
+  useEffect(() => {
+    const purgeTimer = setInterval(() => {
+      const now = Date.now();
+      setMessages((prev) => {
+        const remaining = prev.filter((m) => {
+          if (!m.expires_at) return true;
+          return new Date(m.expires_at).getTime() > now;
+        });
+        return remaining.length !== prev.length ? remaining : prev;
+      });
+    }, 1000);
+
+    return () => clearInterval(purgeTimer);
+  }, [setMessages]);
+
   // Send broadcast when user is typing
   const handleTyping = (val: string) => {
     setText(val);
@@ -645,6 +675,18 @@ function ChatView({
     setShowEmojiPicker(false);
 
     if (data) {
+      let initialExp: string | null = null;
+      const nowMs = Date.now();
+      if (convo.auto_delete_mode === '24h') {
+        initialExp = new Date(nowMs + 24 * 60 * 60 * 1000).toISOString();
+      } else if (convo.auto_delete_mode === '12h') {
+        initialExp = new Date(nowMs + 12 * 60 * 60 * 1000).toISOString();
+      } else if (convo.auto_delete_mode === '3h') {
+        initialExp = new Date(nowMs + 3 * 60 * 60 * 1000).toISOString();
+      } else if (convo.auto_delete_mode === 'custom' && convo.auto_delete_seconds) {
+        initialExp = new Date(nowMs + convo.auto_delete_seconds * 1000).toISOString();
+      }
+
       const newMsg: Message = {
         id: data as string,
         conversation_id: convo.id,
@@ -654,7 +696,7 @@ function ChatView({
         created_at: new Date().toISOString(),
         viewed_at: null,
         deleted_at: null,
-        expires_at: null,
+        expires_at: initialExp,
         reply_to_message_id: null,
       };
       setMessages((old) => mergeMessages(old, [newMsg]));
@@ -1201,13 +1243,14 @@ function MessageBubble({
 
         {isBigEmoji && <span>{msg.content}</span>}
 
-        {/* Timestamp & Read Receipt */}
+        {/* Timestamp, Read Receipt & Disappearing Badge */}
         {!isBigEmoji && (
           <div
             className={`flex items-center justify-end gap-1.5 text-[10px] mt-1.5 ${
               isMine ? 'text-white/75' : 'text-muted'
             }`}
           >
+            {msg.expires_at && <ExpirationTimerBadge expiresAt={msg.expires_at} />}
             <span>{formatTime(msg.created_at)}</span>
             {isMine && (
               <span>
@@ -1222,5 +1265,37 @@ function MessageBubble({
         )}
       </div>
     </div>
+  );
+}
+
+function ExpirationTimerBadge({ expiresAt }: { expiresAt: string }) {
+  const [secondsLeft, setSecondsLeft] = useState<number>(() =>
+    Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000))
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const diff = Math.max(0, Math.round((new Date(expiresAt).getTime() - Date.now()) / 1000));
+      setSecondsLeft(diff);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [expiresAt]);
+
+  if (secondsLeft <= 0) return null;
+
+  const isUrgent = secondsLeft <= 20;
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+        isUrgent
+          ? 'bg-rose-500/25 text-rose-300 animate-pulse border border-rose-500/50'
+          : 'bg-amber-500/20 text-amber-300 border border-amber-500/35'
+      }`}
+      title={`Disappears in ${secondsLeft}s`}
+    >
+      <Flame size={10} className={isUrgent ? 'text-rose-400 animate-bounce' : 'text-amber-400'} />
+      <span>{secondsLeft < 60 ? `${secondsLeft}s` : `${Math.ceil(secondsLeft / 60)}m`}</span>
+    </span>
   );
 }

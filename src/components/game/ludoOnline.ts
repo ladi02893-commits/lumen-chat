@@ -4,22 +4,13 @@ import { insforge } from '@/lib/insforge/client';
 import { PlayerColor, Token } from './ludoTypes';
 
 export interface GameAction {
-  type: 'ROLL' | 'MOVE' | 'REACTION' | 'JOIN' | 'RESET';
+  type: 'ROLL' | 'MOVE' | 'REACTION' | 'JOIN' | 'RESET' | 'SYNC';
   roomCode: string;
   senderColor: PlayerColor;
   senderName: string;
   payload?: any;
   timestamp: number;
-}
-
-export interface OnlineRoomState {
-  roomCode: string;
-  myColor: PlayerColor;
-  myName: string;
-  opponentColor: PlayerColor;
-  opponentName: string;
-  isHost: boolean;
-  isConnected: boolean;
+  id?: string;
 }
 
 class LudoOnlineManager {
@@ -27,14 +18,15 @@ class LudoOnlineManager {
   private roomCode: string | null = null;
   private listeners: ((action: GameAction) => void)[] = [];
   private pollInterval: NodeJS.Timeout | null = null;
+  private processedActionIds = new Set<string>();
   private lastActionTime: number = 0;
 
   constructor() {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-      this.broadcastChannel = new BroadcastChannel('ludo_online_arena');
+      this.broadcastChannel = new BroadcastChannel('ludo_online_arena_v2');
       this.broadcastChannel.onmessage = (event) => {
         if (event.data && event.data.roomCode === this.roomCode) {
-          this.notifyListeners(event.data);
+          this.handleIncomingAction(event.data);
         }
       };
     }
@@ -47,9 +39,18 @@ class LudoOnlineManager {
     };
   }
 
-  private notifyListeners(action: GameAction) {
-    if (action.timestamp <= this.lastActionTime) return;
-    this.lastActionTime = action.timestamp;
+  private handleIncomingAction(action: GameAction) {
+    const actionId = action.id || `${action.type}_${action.timestamp}_${action.senderColor}`;
+    if (this.processedActionIds.has(actionId)) return;
+    this.processedActionIds.add(actionId);
+
+    // Limit set size
+    if (this.processedActionIds.size > 200) {
+      const first = Array.from(this.processedActionIds)[0];
+      this.processedActionIds.delete(first);
+    }
+
+    this.lastActionTime = Math.max(this.lastActionTime, action.timestamp);
     this.listeners.forEach((cb) => cb(action));
   }
 
@@ -59,9 +60,9 @@ class LudoOnlineManager {
     const code = Math.floor(1000 + Math.random() * 9000).toString();
     this.roomCode = code;
     this.lastActionTime = Date.now();
+    this.processedActionIds.clear();
 
     try {
-      // Create room record in InsForge database
       await insforge.database.from('ludo_rooms').insert([
         {
           room_code: code,
@@ -69,10 +70,11 @@ class LudoOnlineManager {
           host_name: hostName,
           status: 'waiting',
           created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         },
       ]);
-    } catch {
-      // Fallback works with local broadcast channel
+    } catch (e) {
+      console.warn('Fallback to local broadcast channel:', e);
     }
 
     this.startPolling(code);
@@ -86,6 +88,7 @@ class LudoOnlineManager {
     const cleanCode = code.trim();
     this.roomCode = cleanCode;
     this.lastActionTime = Date.now();
+    this.processedActionIds.clear();
 
     try {
       const { data, error } = await insforge.database
@@ -95,7 +98,7 @@ class LudoOnlineManager {
         .maybeSingle();
 
       if (data) {
-        // Update room with guest
+        // Update room status
         await insforge.database
           .from('ludo_rooms')
           .update({
@@ -106,7 +109,7 @@ class LudoOnlineManager {
           })
           .eq('room_code', cleanCode);
 
-        // Broadcast join event
+        // Send join action
         this.sendAction({
           type: 'JOIN',
           roomCode: cleanCode,
@@ -114,22 +117,22 @@ class LudoOnlineManager {
           senderName: guestName,
           payload: { hostName: data.host_name },
           timestamp: Date.now(),
+          id: `join_${Date.now()}`,
         });
 
         this.startPolling(cleanCode);
         return { success: true, room: data };
       }
-    } catch {
-      // Fallback
-    }
+    } catch {}
 
-    // Also notify via local channel in case they are playing on same browser/network
+    // Fallback broadcast
     this.sendAction({
       type: 'JOIN',
       roomCode: cleanCode,
       senderColor: 'green',
       senderName: guestName,
       timestamp: Date.now(),
+      id: `join_${Date.now()}`,
     });
 
     this.startPolling(cleanCode);
@@ -138,12 +141,19 @@ class LudoOnlineManager {
 
   public sendAction(action: GameAction) {
     if (!this.roomCode) return;
-    this.lastActionTime = action.timestamp;
+    const actionWithId = {
+      ...action,
+      id: action.id || `${action.type}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      timestamp: action.timestamp || Date.now(),
+      roomCode: this.roomCode,
+    };
+
+    this.processedActionIds.add(actionWithId.id);
 
     // 1. Broadcast locally
     if (this.broadcastChannel) {
       try {
-        this.broadcastChannel.postMessage(action);
+        this.broadcastChannel.postMessage(actionWithId);
       } catch {}
     }
 
@@ -152,7 +162,8 @@ class LudoOnlineManager {
       insforge.database
         .from('ludo_rooms')
         .update({
-          last_action: action,
+          last_action: actionWithId,
+          status: 'playing',
           updated_at: new Date().toISOString(),
         })
         .eq('room_code', this.roomCode)
@@ -174,10 +185,10 @@ class LudoOnlineManager {
 
         if (data?.last_action) {
           const action = data.last_action as GameAction;
-          this.notifyListeners(action);
+          this.handleIncomingAction(action);
         }
       } catch {}
-    }, 1200);
+    }, 750);
   }
 
   public leaveRoom() {
@@ -186,6 +197,7 @@ class LudoOnlineManager {
       this.pollInterval = null;
     }
     this.roomCode = null;
+    this.processedActionIds.clear();
   }
 }
 

@@ -25,7 +25,8 @@ import {
   Copy,
   Check,
   Trophy,
-  Sparkles,
+  Play,
+  ArrowLeft,
   Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -33,7 +34,7 @@ import { toast } from 'sonner';
 const INITIAL_PLAYERS: Record<PlayerColor, PlayerState> = {
   red: {
     color: 'red',
-    name: 'You (Red)',
+    name: 'Player 1 (Red)',
     isAI: false,
     tokens: [
       { id: 0, color: 'red', status: 'base', step: -1 },
@@ -86,6 +87,7 @@ const INITIAL_PLAYERS: Record<PlayerColor, PlayerState> = {
 };
 
 export function LudoGameView() {
+  const [gameState, setGameState] = useState<'lobby' | 'playing'>('lobby');
   const [players, setPlayers] = useState<Record<PlayerColor, PlayerState>>(INITIAL_PLAYERS);
   const [activePlayer, setActivePlayer] = useState<PlayerColor>('red');
   const [diceValue, setDiceValue] = useState<number>(6);
@@ -98,7 +100,7 @@ export function LudoGameView() {
   const [isPinModalOpen, setIsPinModalOpen] = useState(false);
   const [centerTapCount, setCenterTapCount] = useState(0);
   const [winner, setWinner] = useState<PlayerColor | null>(null);
-  const [gameLog, setGameLog] = useState<string>('Welcome to Ludo Arena! Roll dice to start.');
+  const [gameLog, setGameLog] = useState<string>('Match started! Roll dice to play.');
   const [turnTimeLeft, setTurnTimeLeft] = useState<number>(15);
 
   // Online Multiplayer State
@@ -118,9 +120,33 @@ export function LudoGameView() {
     setSoundOn(newState);
   };
 
-  // Log action message
   const logMessage = (msg: string) => {
     setGameLog(msg);
+  };
+
+  // Start match from Lobby
+  const startMatch = (mode: 'ai' | 'pass') => {
+    setGameMode(mode);
+    setOnlineRoomCode(null);
+    const freshPlayers = JSON.parse(JSON.stringify(INITIAL_PLAYERS));
+    if (mode === 'pass') {
+      freshPlayers.red.name = 'Player 1 (Red)';
+      freshPlayers.green.name = 'Player 2 (Green)';
+      freshPlayers.green.isAI = false;
+    } else {
+      freshPlayers.red.name = 'You (Red)';
+    }
+    setPlayers(freshPlayers);
+    setActivePlayer('red');
+    setDiceValue(6);
+    setHasRolled(false);
+    setIsRolling(false);
+    setIsAnimatingMove(false);
+    setMovingTokenId(null);
+    setWinner(null);
+    setTurnTimeLeft(15);
+    setGameState('playing');
+    logMessage('Match started! Red player rolls the dice.');
   };
 
   // Reset Game
@@ -131,6 +157,7 @@ export function LudoGameView() {
       freshPlayers.green.name = isHost ? 'Friend (Green)' : 'You (Green)';
       freshPlayers.green.isAI = false;
     } else if (gameMode === 'pass') {
+      freshPlayers.red.name = 'Player 1 (Red)';
       freshPlayers.green.name = 'Player 2 (Green)';
       freshPlayers.green.isAI = false;
     }
@@ -158,18 +185,19 @@ export function LudoGameView() {
     toast.success('Ludo Arena match reset!');
   };
 
-  // Turn timer countdown (15 seconds)
+  // Turn timer countdown
   useEffect(() => {
-    if (winner || isRolling || isAnimatingMove) return;
+    if (gameState !== 'playing' || winner || isRolling || isAnimatingMove) return;
 
     const timer = setInterval(() => {
       setTurnTimeLeft((prev) => {
         if (prev <= 1) {
-          // Time expired -> auto roll or pass
-          if (!hasRolled) {
-            rollDice();
-          } else {
-            nextTurn();
+          if (gameMode !== 'online' || activePlayer === myOnlineColor) {
+            if (!hasRolled) {
+              rollDice();
+            } else {
+              nextTurn();
+            }
           }
           return 15;
         }
@@ -178,7 +206,7 @@ export function LudoGameView() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [activePlayer, hasRolled, isRolling, isAnimatingMove, winner]);
+  }, [gameState, activePlayer, hasRolled, isRolling, isAnimatingMove, winner, gameMode, myOnlineColor]);
 
   // Switch turn
   const nextTurn = useCallback(() => {
@@ -189,9 +217,10 @@ export function LudoGameView() {
     setActivePlayer(nextPlayer);
   }, [activePlayer, playerOrder]);
 
-  // Check if a token can move
+  // Check if token can move
   const canMoveToken = useCallback(
     (token: Token): boolean => {
+      if (gameState !== 'playing') return false;
       if (token.color !== activePlayer) return false;
       if (!hasRolled || isRolling || isAnimatingMove) return false;
 
@@ -210,49 +239,47 @@ export function LudoGameView() {
 
       return false;
     },
-    [activePlayer, hasRolled, isRolling, isAnimatingMove, diceValue, gameMode, myOnlineColor]
+    [gameState, activePlayer, hasRolled, isRolling, isAnimatingMove, diceValue, gameMode, myOnlineColor]
   );
 
   // Step-by-Step Token Hop Animation
   const animateTokenMovement = useCallback(
-    async (token: Token, targetStep: number, isSpawning: boolean): Promise<void> => {
+    async (tokenColor: PlayerColor, tokenId: number, fromStep: number, targetStep: number, isSpawning: boolean): Promise<void> => {
       setIsAnimatingMove(true);
-      setMovingTokenId(`${token.color}-${token.id}`);
+      setMovingTokenId(`${tokenColor}-${tokenId}`);
 
       if (isSpawning) {
-        // Spawn animation from base to start tile (step = 0)
         ludoAudio.playSafeStar();
         await new Promise((r) => setTimeout(r, 180));
         setPlayers((prev) => {
           const next = { ...prev };
-          const p = { ...next[token.color] };
+          const p = { ...next[tokenColor] };
           const tokens = [...p.tokens];
-          tokens[token.id] = { ...tokens[token.id], status: 'track', step: 0 };
+          tokens[tokenId] = { ...tokens[tokenId], status: 'track', step: 0 };
           p.tokens = tokens;
-          next[token.color] = p;
+          next[tokenColor] = p;
           return next;
         });
       } else {
-        // Hop tile by tile
-        const startStep = token.step;
+        const startStep = fromStep;
         const totalSteps = targetStep - startStep;
 
         for (let s = 1; s <= totalSteps; s++) {
           const curStep = startStep + s;
           ludoAudio.playTokenStep();
-          await new Promise((r) => setTimeout(r, 90));
+          await new Promise((r) => setTimeout(r, 85));
 
           setPlayers((prev) => {
             const next = { ...prev };
-            const p = { ...next[token.color] };
+            const p = { ...next[tokenColor] };
             const tokens = [...p.tokens];
-            tokens[token.id] = {
-              ...tokens[token.id],
+            tokens[tokenId] = {
+              ...tokens[tokenId],
               step: curStep,
               status: curStep === 56 ? 'home' : 'track',
             };
             p.tokens = tokens;
-            next[token.color] = p;
+            next[tokenColor] = p;
             return next;
           });
         }
@@ -264,30 +291,35 @@ export function LudoGameView() {
     []
   );
 
-  // Execute token move
+  // Execute token move (Local action)
   const handleMoveToken = useCallback(
-    async (token: Token, broadcast = true) => {
-      if (!canMoveToken(token) && broadcast) return;
+    async (token: Token) => {
+      if (!canMoveToken(token)) return;
 
       const isSpawning = token.status === 'base' && diceValue === 6;
       const targetStep = isSpawning ? 0 : token.step + diceValue;
 
       // Broadcast move to remote friend in Online mode
-      if (broadcast && gameMode === 'online' && onlineRoomCode) {
+      if (gameMode === 'online' && onlineRoomCode) {
         ludoOnline.sendAction({
           type: 'MOVE',
           roomCode: onlineRoomCode,
           senderColor: token.color,
           senderName: isHost ? 'Host' : 'Friend',
-          payload: { tokenId: token.id, diceValue },
+          payload: {
+            tokenId: token.id,
+            fromStep: token.step,
+            targetStep,
+            isSpawning,
+            diceValue,
+            playerColor: token.color,
+          },
           timestamp: Date.now(),
         });
       }
 
-      // Run smooth stepping animation
-      await animateTokenMovement(token, targetStep, isSpawning);
+      await animateTokenMovement(token.color, token.id, token.step, targetStep, isSpawning);
 
-      // Check capture and home triumph
       let didCapture = false;
       let didReachHome = targetStep === 56;
 
@@ -298,10 +330,9 @@ export function LudoGameView() {
         if (didReachHome) {
           player.score += 150;
           ludoAudio.playVictoryFanfare();
-          logMessage(`🏆 ${player.name} got a token HOME! Extra roll awarded!`);
+          logMessage(`🏆 ${player.name} finished a token in Home!`);
         }
 
-        // Check capture on main track
         if (!isSpawning && targetStep < 51) {
           const myGlobalIdx = (COLOR_START_INDICES[token.color] + targetStep) % 52;
           const isSafe = SAFE_INDICES.includes(myGlobalIdx);
@@ -320,7 +351,7 @@ export function LudoGameView() {
                       didCapture = true;
                       player.score += 100;
                       ludoAudio.playTokenCapture();
-                      logMessage(`⚔️ ${player.name} captured ${otherPlayer.name}'s token! Extra turn!`);
+                      logMessage(`⚔️ ${player.name} captured ${otherPlayer.name}'s token! Extra roll!`);
                     }
                   }
                 });
@@ -334,18 +365,16 @@ export function LudoGameView() {
           }
         }
 
-        // Check victory (all 4 tokens home)
         const allHome = player.tokens.every((t) => t.status === 'home');
         if (allHome) {
           setWinner(player.color);
           ludoAudio.playVictoryFanfare();
-          logMessage(`🎉 VICTORY! ${player.name} has won the Ludo Championship!`);
+          logMessage(`🎉 VICTORY! ${player.name} has won the match!`);
         }
 
         return nextState;
       });
 
-      // Bonus roll on 6, capture, or home finish
       if (diceValue === 6 || didCapture || didReachHome) {
         setHasRolled(false);
         setTurnTimeLeft(15);
@@ -369,171 +398,212 @@ export function LudoGameView() {
     ]
   );
 
-  // Roll Dice Action
-  const rollDice = useCallback(
-    (forcedValue?: number, broadcast = true) => {
-      if (isRolling || hasRolled || isAnimatingMove) return;
+  // Roll Dice Action (Local action)
+  const rollDice = useCallback(() => {
+    if (gameState !== 'playing' || isRolling || hasRolled || isAnimatingMove) return;
 
-      setIsRolling(true);
-      ludoAudio.playDiceRoll();
+    setIsRolling(true);
+    ludoAudio.playDiceRoll();
 
-      setTimeout(() => {
-        const rolled = forcedValue || Math.floor(Math.random() * 6) + 1;
-        setDiceValue(rolled);
-        setIsRolling(false);
-        setHasRolled(true);
+    setTimeout(() => {
+      const rolled = Math.floor(Math.random() * 6) + 1;
+      setDiceValue(rolled);
+      setIsRolling(false);
+      setHasRolled(true);
 
-        const currentPlayerState = players[activePlayer];
-        logMessage(`🎲 ${currentPlayerState.name} rolled a ${rolled}!`);
+      const currentPlayerState = players[activePlayer];
+      logMessage(`🎲 ${currentPlayerState.name} rolled a ${rolled}!`);
 
-        // Check 3 consecutive sixes rule
-        let streak = rolled === 6 ? currentPlayerState.sixStreak + 1 : 0;
-        currentPlayerState.sixStreak = streak;
+      let streak = rolled === 6 ? currentPlayerState.sixStreak + 1 : 0;
+      currentPlayerState.sixStreak = streak;
 
-        if (streak >= 3) {
-          toast.error('3 consecutive 6s! Turn forfeited.');
-          logMessage(`⚠️ ${currentPlayerState.name} rolled 3 sixes in a row. Turn passed!`);
-          setTimeout(nextTurn, 800);
-          return;
-        }
-
-        // Broadcast to remote player
-        if (broadcast && gameMode === 'online' && onlineRoomCode) {
-          ludoOnline.sendAction({
-            type: 'ROLL',
-            roomCode: onlineRoomCode,
-            senderColor: activePlayer,
-            senderName: isHost ? 'Host' : 'Friend',
-            payload: { value: rolled },
-            timestamp: Date.now(),
-          });
-        }
-
-        const validTokens = currentPlayerState.tokens.filter((t) => {
-          if (t.status === 'base') return rolled === 6;
-          if (t.status === 'track') return t.step + rolled <= 56;
-          return false;
-        });
-
-        if (validTokens.length === 0) {
-          logMessage(`No moves available for ${currentPlayerState.name}. Next turn...`);
-          setTimeout(nextTurn, 900);
-        } else if (validTokens.length === 1 && currentPlayerState.isAI) {
-          // Auto move single eligible token for AI
-          setTimeout(() => handleMoveToken(validTokens[0]), 650);
-        }
-      }, 650);
-    },
-    [
-      isRolling,
-      hasRolled,
-      isAnimatingMove,
-      gameMode,
-      onlineRoomCode,
-      activePlayer,
-      isHost,
-      players,
-      nextTurn,
-      handleMoveToken,
-    ]
-  );
-
-  // Smart AI Decision Making
-  useEffect(() => {
-    const currentPlayerState = players[activePlayer];
-    if (gameMode === 'ai' && currentPlayerState.isAI && !winner && !isAnimatingMove) {
-      if (!hasRolled && !isRolling) {
-        const timer = setTimeout(() => rollDice(), 750);
-        return () => clearTimeout(timer);
+      if (streak >= 3) {
+        toast.error('3 consecutive 6s! Turn forfeited.');
+        logMessage(`⚠️ ${currentPlayerState.name} rolled 3 sixes in a row. Turn passed!`);
+        setTimeout(nextTurn, 800);
+        return;
       }
 
-      if (hasRolled && !isRolling) {
-        const validTokens = currentPlayerState.tokens.filter((t) => {
-          if (t.status === 'base') return diceValue === 6;
-          if (t.status === 'track') return t.step + diceValue <= 56;
-          return false;
+      if (gameMode === 'online' && onlineRoomCode) {
+        ludoOnline.sendAction({
+          type: 'ROLL',
+          roomCode: onlineRoomCode,
+          senderColor: activePlayer,
+          senderName: isHost ? 'Host' : 'Friend',
+          payload: { value: rolled, playerColor: activePlayer },
+          timestamp: Date.now(),
         });
-
-        if (validTokens.length > 0) {
-          const timer = setTimeout(() => {
-            // 1. Prioritize capturing opponent
-            let chosen = validTokens.find((t) => {
-              if (t.status !== 'track' || t.step + diceValue >= 51) return false;
-              const targetIdx = (COLOR_START_INDICES[t.color] + t.step + diceValue) % 52;
-              if (SAFE_INDICES.includes(targetIdx)) return false;
-
-              return Object.values(players).some((other) => {
-                if (other.color === t.color) return false;
-                return other.tokens.some((ot) => {
-                  if (ot.status !== 'track' || ot.step >= 51) return false;
-                  return (COLOR_START_INDICES[other.color] + ot.step) % 52 === targetIdx;
-                });
-              });
-            });
-
-            // 2. Prioritize entering home (finish)
-            if (!chosen) {
-              chosen = validTokens.find((t) => t.status === 'track' && t.step + diceValue === 56);
-            }
-
-            // 3. Prioritize releasing base token on 6
-            if (!chosen && diceValue === 6) {
-              chosen = validTokens.find((t) => t.status === 'base');
-            }
-
-            // 4. Default: advance closest-to-home token
-            if (!chosen) {
-              chosen = validTokens.sort((a, b) => b.step - a.step)[0];
-            }
-
-            handleMoveToken(chosen);
-          }, 700);
-          return () => clearTimeout(timer);
-        }
       }
-    }
+
+      const validTokens = currentPlayerState.tokens.filter((t) => {
+        if (t.status === 'base') return rolled === 6;
+        if (t.status === 'track') return t.step + rolled <= 56;
+        return false;
+      });
+
+      if (validTokens.length === 0) {
+        logMessage(`No moves available for ${currentPlayerState.name}. Next turn...`);
+        setTimeout(nextTurn, 900);
+      } else if (validTokens.length === 1 && currentPlayerState.isAI) {
+        setTimeout(() => handleMoveToken(validTokens[0]), 650);
+      }
+    }, 600);
   }, [
-    activePlayer,
-    players,
-    gameMode,
-    hasRolled,
+    gameState,
     isRolling,
+    hasRolled,
     isAnimatingMove,
-    diceValue,
-    winner,
-    rollDice,
+    gameMode,
+    onlineRoomCode,
+    activePlayer,
+    isHost,
+    players,
+    nextTurn,
     handleMoveToken,
   ]);
 
-  // Online Multiplayer Event Listener
+  // Online Multiplayer Remote Event Handler
   useEffect(() => {
     if (gameMode !== 'online' || !onlineRoomCode) return;
 
-    const unsubscribe = ludoOnline.subscribe((action: GameAction) => {
+    const unsubscribe = ludoOnline.subscribe(async (action: GameAction) => {
       if (action.roomCode !== onlineRoomCode) return;
-      if (action.senderColor === myOnlineColor && action.type !== 'RESET') return;
 
-      if (action.type === 'ROLL') {
-        rollDice(action.payload.value, false);
-      } else if (action.type === 'MOVE') {
-        const tokenColor = action.senderColor;
-        const targetPlayer = players[tokenColor];
-        if (targetPlayer) {
-          const targetToken = targetPlayer.tokens[action.payload.tokenId];
-          if (targetToken) {
-            handleMoveToken(targetToken, false);
+      // When Guest Joins
+      if (action.type === 'JOIN') {
+        const guestName = action.senderName || 'Friend (Green)';
+        setPlayers((prev) => {
+          const next = { ...prev };
+          if (isHost) {
+            next.green = { ...next.green, name: guestName, isAI: false };
+          } else {
+            next.red = { ...next.red, name: action.payload?.hostName || 'Host (Red)', isAI: false };
           }
+          return next;
+        });
+        toast.success(`🎮 Connected with ${action.senderName || 'your friend'}!`);
+        logMessage(`${action.senderName || 'Friend'} joined the table.`);
+        return;
+      }
+
+      // Ignore actions sent by myself
+      if (action.senderColor === myOnlineColor) return;
+
+      // Remote Player Rolled Dice
+      if (action.type === 'ROLL') {
+        const rolled = action.payload.value;
+        const rollSender: PlayerColor = action.senderColor as PlayerColor;
+        setActivePlayer(rollSender);
+        setDiceValue(rolled);
+        setIsRolling(true);
+        ludoAudio.playDiceRoll();
+
+        setTimeout(() => {
+          setIsRolling(false);
+          setHasRolled(true);
+          const pName = players[rollSender]?.name || action.senderName;
+          logMessage(`🎲 ${pName} rolled a ${rolled}!`);
+
+          const targetPlayer = players[rollSender];
+          const validTokens = targetPlayer ? targetPlayer.tokens.filter((t: Token) => {
+            if (t.status === 'base') return rolled === 6;
+            if (t.status === 'track') return t.step + rolled <= 56;
+            return false;
+          }) : [];
+
+          if (validTokens.length === 0) {
+            logMessage(`No moves for ${pName}. Switching turn...`);
+            setTimeout(nextTurn, 900);
+          }
+        }, 550);
+      }
+
+      // Remote Player Moved Token
+      else if (action.type === 'MOVE') {
+        const { tokenId, fromStep, targetStep, isSpawning, diceValue: moveDice } = action.payload;
+        const targetColor: PlayerColor = (action.payload.playerColor as PlayerColor) || action.senderColor;
+        setDiceValue(moveDice);
+
+        await animateTokenMovement(targetColor, tokenId, fromStep, targetStep, isSpawning);
+
+        let didCapture = false;
+        let didReachHome = targetStep === 56;
+
+        setPlayers((prev) => {
+          const nextState = { ...prev };
+          const player = { ...nextState[targetColor] };
+
+          if (didReachHome) {
+            player.score += 150;
+            ludoAudio.playVictoryFanfare();
+            logMessage(`🏆 ${player.name} finished a token in Home!`);
+          }
+
+          if (!isSpawning && targetStep < 51) {
+            const myGlobalIdx = (COLOR_START_INDICES[targetColor] + targetStep) % 52;
+            const isSafe = SAFE_INDICES.includes(myGlobalIdx);
+
+            if (!isSafe) {
+              playerOrder.forEach((otherColor) => {
+                if (otherColor !== targetColor) {
+                  const otherPlayer = { ...nextState[otherColor] };
+                  const otherTokens = [...otherPlayer.tokens];
+
+                  otherTokens.forEach((ot, idx) => {
+                    if (ot.status === 'track' && ot.step < 51) {
+                      const otGlobalIdx = (COLOR_START_INDICES[otherColor] + ot.step) % 52;
+                      if (otGlobalIdx === myGlobalIdx) {
+                        otherTokens[idx] = { ...ot, status: 'base', step: -1 };
+                        didCapture = true;
+                        player.score += 100;
+                        ludoAudio.playTokenCapture();
+                        logMessage(`⚔️ ${player.name} captured ${otherPlayer.name}'s token!`);
+                      }
+                    }
+                  });
+
+                  if (didCapture) {
+                    otherPlayer.tokens = otherTokens;
+                    nextState[otherColor] = otherPlayer;
+                  }
+                }
+              });
+            }
+          }
+
+          const allHome = player.tokens.every((t: Token) => t.status === 'home');
+          if (allHome) {
+            setWinner(targetColor);
+            ludoAudio.playVictoryFanfare();
+            logMessage(`🎉 VICTORY! ${player.name} has won the match!`);
+          }
+
+          return nextState;
+        });
+
+        if (moveDice === 6 || didCapture || didReachHome) {
+          setHasRolled(false);
+          setTurnTimeLeft(15);
+          logMessage(`🎲 ${players[targetColor]?.name || 'Player'} rolls again.`);
+        } else {
+          nextTurn();
         }
-      } else if (action.type === 'REACTION') {
+      }
+
+      // Remote Reaction
+      else if (action.type === 'REACTION') {
         setReactionBubble({ emoji: action.payload.emoji, sender: action.senderName });
         setTimeout(() => setReactionBubble(null), 3000);
-      } else if (action.type === 'RESET') {
+      }
+
+      // Remote Reset
+      else if (action.type === 'RESET') {
         resetGame(false);
       }
     });
 
     return () => unsubscribe();
-  }, [gameMode, onlineRoomCode, myOnlineColor, players, rollDice, handleMoveToken]);
+  }, [gameMode, onlineRoomCode, myOnlineColor, isHost, players, playerOrder, animateTokenMovement, nextTurn]);
 
   // Connect to Online Room
   const handleJoinOnlineRoom = (code: string, host: boolean) => {
@@ -541,6 +611,7 @@ export function LudoGameView() {
     setIsHost(host);
     setGameMode('online');
     setMyOnlineColor(host ? 'red' : 'green');
+    setGameState('playing');
 
     setPlayers((prev) => {
       const next = { ...prev };
@@ -600,14 +671,143 @@ export function LudoGameView() {
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
+  // ==========================================
+  // VIEW 1: LUDO ARENA LOBBY (GAME START SCREEN)
+  // ==========================================
+  if (gameState === 'lobby') {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-950 via-[#070b14] to-black text-slate-100 flex flex-col justify-between p-4 md:p-8 select-none font-sans">
+        <header className="max-w-xl w-full mx-auto flex items-center justify-between py-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xl font-black text-amber-400">🎲 LUDO ARENA</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleToggleSound}
+              className="p-2.5 rounded-2xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition"
+              title={soundOn ? 'Mute Sound' : 'Unmute Sound'}
+            >
+              {soundOn ? <Volume2 size={17} /> : <VolumeX size={17} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsPinModalOpen(true)}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-slate-900 border border-slate-800 text-xs font-semibold text-amber-400 hover:bg-slate-800 transition"
+              title="Private Table Code or Secret Vault PIN"
+            >
+              <KeyRound size={15} />
+              <span>Private Room</span>
+            </button>
+          </div>
+        </header>
+
+        <main className="max-w-md w-full mx-auto my-auto text-center space-y-6">
+          <div className="relative mx-auto size-24 rounded-3xl bg-gradient-to-tr from-amber-500 via-rose-500 to-indigo-600 p-1 shadow-[0_0_50px_rgba(244,63,94,0.35)] flex items-center justify-center animate-bounce">
+            <div className="size-full rounded-2xl bg-slate-950 flex items-center justify-center text-4xl">
+              🎲
+            </div>
+          </div>
+
+          <div>
+            <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white">
+              Ludo Arena <span className="text-amber-400">3D</span>
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-xs mx-auto">
+              Classic casual board gameplay with authentic stepping physics and multiplayer tables.
+            </p>
+          </div>
+
+          <div className="space-y-3 pt-2">
+            <button
+              type="button"
+              onClick={() => startMatch('ai')}
+              className="w-full p-4 rounded-3xl bg-gradient-to-r from-slate-900 to-slate-900/90 border border-slate-800 hover:border-amber-500/50 hover:bg-slate-800/80 transition-all flex items-center justify-between group active:scale-[0.98] shadow-lg"
+            >
+              <div className="flex items-center gap-3 text-left">
+                <div className="size-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 grid place-items-center text-emerald-400 group-hover:scale-110 transition">
+                  <Bot size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white group-hover:text-amber-400 transition">
+                    Play vs Computer (Bots)
+                  </h3>
+                  <p className="text-xs text-slate-400">Single player match vs 3 smart AI bots</p>
+                </div>
+              </div>
+              <Play size={18} className="text-slate-500 group-hover:text-amber-400 transition" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => startMatch('pass')}
+              className="w-full p-4 rounded-3xl bg-gradient-to-r from-slate-900 to-slate-900/90 border border-slate-800 hover:border-blue-500/50 hover:bg-slate-800/80 transition-all flex items-center justify-between group active:scale-[0.98] shadow-lg"
+            >
+              <div className="flex items-center gap-3 text-left">
+                <div className="size-11 rounded-2xl bg-blue-500/15 border border-blue-500/30 grid place-items-center text-blue-400 group-hover:scale-110 transition">
+                  <Users size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white group-hover:text-blue-400 transition">
+                    2-Player Pass &amp; Play
+                  </h3>
+                  <p className="text-xs text-slate-400">Play locally with a friend on this device</p>
+                </div>
+              </div>
+              <Play size={18} className="text-slate-500 group-hover:text-blue-400 transition" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsPinModalOpen(true)}
+              className="w-full p-4 rounded-3xl bg-gradient-to-r from-slate-900 to-slate-900/90 border border-slate-800 hover:border-rose-500/50 hover:bg-slate-800/80 transition-all flex items-center justify-between group active:scale-[0.98] shadow-lg"
+            >
+              <div className="flex items-center gap-3 text-left">
+                <div className="size-11 rounded-2xl bg-rose-500/15 border border-rose-500/30 grid place-items-center text-rose-400 group-hover:scale-110 transition">
+                  <Globe size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white group-hover:text-rose-400 transition">
+                    Online Private Room (2P)
+                  </h3>
+                  <p className="text-xs text-slate-400">Create table &amp; share code with friend</p>
+                </div>
+              </div>
+              <KeyRound size={18} className="text-slate-500 group-hover:text-rose-400 transition" />
+            </button>
+          </div>
+        </main>
+
+        <footer className="max-w-xl w-full mx-auto text-center py-2 text-[11px] text-slate-500">
+          Ludo Arena 3D v2.4 • Casual Online Gaming
+        </footer>
+
+        <SecretPinModal
+          isOpen={isPinModalOpen}
+          onClose={() => setIsPinModalOpen(false)}
+          onJoinOnlineRoom={handleJoinOnlineRoom}
+        />
+      </div>
+    );
+  }
+
+  // ==========================================
+  // VIEW 2: ACTIVE MATCH BOARD
+  // ==========================================
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-[#070b14] to-black text-slate-100 flex flex-col justify-between p-2 sm:p-3 md:p-5 select-none font-sans">
-      {/* Top Navbar */}
       <header className="max-w-4xl w-full mx-auto flex items-center justify-between py-2 px-3 sm:px-4 rounded-2xl bg-slate-900/85 border border-slate-800 backdrop-blur-md shadow-2xl">
-        <div className="flex items-center gap-3">
-          <div className="size-10 rounded-2xl bg-gradient-to-tr from-amber-500 via-rose-500 to-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-rose-500/20 text-lg">
-            🎲
-          </div>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setGameState('lobby')}
+            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition flex items-center gap-1 text-xs font-semibold"
+            title="Return to Game Lobby"
+          >
+            <ArrowLeft size={16} />
+            <span className="hidden sm:inline">Lobby</span>
+          </button>
+
           <div>
             <h1 className="font-bold text-sm sm:text-base tracking-tight text-white flex items-center gap-2">
               Ludo Arena 3D
@@ -617,19 +817,13 @@ export function LudoGameView() {
                 </span>
               ) : (
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/30">
-                  Classic Pro
+                  {gameMode === 'ai' ? 'vs AI Match' : '2P Local'}
                 </span>
               )}
             </h1>
-            <p className="text-[11px] text-slate-400">
-              {gameMode === 'online'
-                ? `Match with Friend (${isHost ? 'Red' : 'Green'})`
-                : '100% Authentic Board Physics'}
-            </p>
           </div>
         </div>
 
-        {/* Action Controls */}
         <div className="flex items-center gap-2">
           {gameMode === 'online' && onlineRoomCode && (
             <button
@@ -645,8 +839,8 @@ export function LudoGameView() {
           <button
             type="button"
             onClick={() => setIsPinModalOpen(true)}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-rose-500/20 hover:from-amber-500/30 hover:to-rose-500/30 text-amber-300 text-xs font-bold border border-amber-500/40 transition active:scale-95 shadow-sm"
-            title="Create or Join 2-Player Table"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-bold border border-slate-700 transition active:scale-95 shadow-sm"
+            title="Private Room / PIN"
           >
             <KeyRound size={14} className="text-amber-400" />
             <span className="hidden sm:inline">Private Table</span>
@@ -784,7 +978,7 @@ export function LudoGameView() {
         <div className="lg:col-span-3 flex flex-col items-center justify-center gap-4 bg-slate-900/70 border border-slate-800 p-4 sm:p-5 rounded-3xl backdrop-blur-sm shadow-2xl">
           <div className="text-center">
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">
-              Current Move
+              Active Player
             </p>
             <h3 className="text-sm font-extrabold text-white mt-0.5">
               {players[activePlayer].name}
@@ -807,51 +1001,17 @@ export function LudoGameView() {
             onSecretTrigger={() => setIsPinModalOpen(true)}
           />
 
-          {/* Mode Switcher */}
-          <div className="w-full grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-semibold">
-            <button
-              onClick={() => {
-                setGameMode('ai');
-                setOnlineRoomCode(null);
-                resetGame(false);
-              }}
-              className={`py-1.5 rounded-lg transition text-center ${
-                gameMode === 'ai'
-                  ? 'bg-slate-800 text-white shadow-md font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              vs AI
-            </button>
-            <button
-              onClick={() => {
-                setGameMode('pass');
-                setOnlineRoomCode(null);
-                resetGame(false);
-              }}
-              className={`py-1.5 rounded-lg transition text-center ${
-                gameMode === 'pass'
-                  ? 'bg-slate-800 text-white shadow-md font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              2P Local
-            </button>
-            <button
-              onClick={() => setIsPinModalOpen(true)}
-              className={`py-1.5 rounded-lg transition text-center ${
-                gameMode === 'online'
-                  ? 'bg-amber-500/25 text-amber-300 border border-amber-500/40 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              2P Online
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setGameState('lobby')}
+            className="w-full py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-400 hover:text-white transition font-medium"
+          >
+            ← Exit to Lobby
+          </button>
         </div>
       </main>
 
-      {/* VICTORY CHAMPION MODAL */}
+      {/* VICTORY MODAL */}
       <AnimatePresence>
         {winner && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
@@ -872,7 +1032,7 @@ export function LudoGameView() {
                   {players[winner].name} Won!
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  All 4 tokens successfully reached the Home Triumph!
+                  All 4 tokens reached Home!
                 </p>
               </div>
 
@@ -887,19 +1047,28 @@ export function LudoGameView() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => resetGame(true)}
-                className="w-full h-12 rounded-2xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-slate-950 font-extrabold text-sm shadow-lg shadow-amber-500/25 transition active:scale-98"
-              >
-                Play New Match
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => resetGame(true)}
+                  className="flex-1 h-11 rounded-2xl bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 font-extrabold text-xs shadow-md"
+                >
+                  Play Again
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGameState('lobby')}
+                  className="px-4 h-11 rounded-2xl bg-slate-800 text-white font-semibold text-xs"
+                >
+                  Lobby
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
-      {/* Secret PIN & Online Room Modal */}
+      {/* Secret PIN Modal */}
       <SecretPinModal
         isOpen={isPinModalOpen}
         onClose={() => setIsPinModalOpen(false)}

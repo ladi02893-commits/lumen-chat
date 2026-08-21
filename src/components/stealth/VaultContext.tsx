@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { insforge } from '@/lib/insforge/client';
 import { toast } from 'sonner';
 
 interface VaultContextType {
@@ -8,17 +9,20 @@ interface VaultContextType {
   vaultPin: string;
   autoLockMinutes: number;
   lockOnTabLeave: boolean;
+  logoutOnTabLeave: boolean;
   unlockVault: (inputPin: string) => boolean;
   lockVault: () => void;
   updatePin: (newPin: string) => boolean;
   setAutoLockMinutes: (minutes: number) => void;
   setLockOnTabLeave: (enabled: boolean) => void;
+  setLogoutOnTabLeave: (enabled: boolean) => void;
 }
 
 const DEFAULT_PIN = '1234';
 const PIN_STORAGE_KEY = 'lumen_ghost_vault_pin';
 const AUTO_LOCK_STORAGE_KEY = 'lumen_ghost_auto_lock_min';
 const LOCK_TAB_STORAGE_KEY = 'lumen_ghost_lock_on_tab_leave';
+const LOGOUT_TAB_STORAGE_KEY = 'lumen_ghost_logout_on_tab_leave';
 
 const VaultContext = createContext<VaultContextType | undefined>(undefined);
 
@@ -27,6 +31,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
   const [vaultPin, setVaultPinState] = useState<string>(DEFAULT_PIN);
   const [autoLockMinutes, setAutoLockMinutesState] = useState<number>(3);
   const [lockOnTabLeave, setLockOnTabLeaveState] = useState<boolean>(true);
+  const [logoutOnTabLeave, setLogoutOnTabLeaveState] = useState<boolean>(true);
   const lastActivityRef = useRef<number>(Date.now());
   const escapeCountRef = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
 
@@ -49,23 +54,33 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       if (storedLockTab !== null) {
         setLockOnTabLeaveState(storedLockTab === 'true');
       }
+
+      const storedLogoutTab = localStorage.getItem(LOGOUT_TAB_STORAGE_KEY);
+      if (storedLogoutTab !== null) {
+        setLogoutOnTabLeaveState(storedLogoutTab === 'true');
+      }
     } catch {
       // Storage access blocked or SSR
     }
   }, []);
 
-  // Lock vault action
-  const lockVault = useCallback(() => {
+  // Complete Lock and Sign Out action
+  const lockVault = useCallback(async () => {
     setIsVaultUnlocked(false);
+    if (logoutOnTabLeave) {
+      try {
+        await insforge.auth.signOut();
+      } catch {}
+    }
     toast.info('Returned to Ludo Arena', { duration: 1500 });
-  }, []);
+  }, [logoutOnTabLeave]);
 
   // Unlock vault action
   const unlockVault = useCallback(
     (inputPin: string): boolean => {
       const trimmed = inputPin.trim();
-      // Allow user's custom PIN or fallback master PIN 1234
-      if (trimmed === vaultPin || trimmed === '1234' || trimmed === '7860') {
+      // Only the user's active configured PIN can unlock the vault
+      if (trimmed === vaultPin) {
         setIsVaultUnlocked(true);
         lastActivityRef.current = Date.now();
         toast.success('Private Vault Unlocked', { duration: 1800 });
@@ -87,9 +102,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     try {
       localStorage.setItem(PIN_STORAGE_KEY, cleanPin);
       toast.success('Secret Vault PIN updated');
-    } catch {
-      // ignore
-    }
+    } catch {}
     return true;
   }, []);
 
@@ -109,6 +122,14 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  // Set Logout on tab leave
+  const setLogoutOnTabLeave = useCallback((enabled: boolean) => {
+    setLogoutOnTabLeaveState(enabled);
+    try {
+      localStorage.setItem(LOGOUT_TAB_STORAGE_KEY, String(enabled));
+    } catch {}
+  }, []);
+
   // Inactivity auto-lock listener
   useEffect(() => {
     if (!isVaultUnlocked || autoLockMinutes <= 0) return;
@@ -124,7 +145,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       if (Date.now() - lastActivityRef.current > autoLockMinutes * 60 * 1000) {
         lockVault();
       }
-    }, 15000);
+    }, 10000);
 
     return () => {
       events.forEach((ev) => window.removeEventListener(ev, resetActivity));
@@ -132,29 +153,46 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     };
   }, [isVaultUnlocked, autoLockMinutes, lockVault]);
 
-  // Tab switch / Window blur auto-lock
+  // Tab switch / Screen lock / Browser Close Handler
   useEffect(() => {
-    if (!isVaultUnlocked || !lockOnTabLeave) return;
+    const handleImmediateLock = () => {
+      setIsVaultUnlocked(false);
+      if (logoutOnTabLeave) {
+        try {
+          insforge.auth.signOut();
+        } catch {}
+      }
+    };
 
     const handleVisibilityChange = () => {
-      if (document.hidden) {
-        lockVault();
+      if (document.hidden && (lockOnTabLeave || logoutOnTabLeave)) {
+        handleImmediateLock();
+      }
+    };
+
+    const handlePageHide = () => {
+      if (lockOnTabLeave || logoutOnTabLeave) {
+        handleImmediateLock();
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('beforeunload', handlePageHide);
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('beforeunload', handlePageHide);
     };
-  }, [isVaultUnlocked, lockOnTabLeave, lockVault]);
+  }, [lockOnTabLeave, logoutOnTabLeave]);
 
-  // Emergency Panic Key listener (Double Escape or Backtick)
+  // Emergency Panic Key listener (Double Escape)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         const now = Date.now();
         if (now - escapeCountRef.current.lastTime < 500) {
-          // Double tap Escape triggers instant emergency lock
           lockVault();
           escapeCountRef.current = { count: 0, lastTime: 0 };
         } else {
@@ -174,11 +212,13 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
         vaultPin,
         autoLockMinutes,
         lockOnTabLeave,
+        logoutOnTabLeave,
         unlockVault,
         lockVault,
         updatePin,
         setAutoLockMinutes,
         setLockOnTabLeave,
+        setLogoutOnTabLeave,
       }}
     >
       {children}

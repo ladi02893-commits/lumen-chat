@@ -33,6 +33,8 @@ export default function Page() {
     setAutoLockMinutes,
     lockOnTabLeave,
     setLockOnTabLeave,
+    logoutOnTabLeave,
+    setLogoutOnTabLeave,
     lockVault,
   } = useVault();
 
@@ -201,6 +203,22 @@ export default function Page() {
               }`}
             >
               {lockOnTabLeave && <Check size={14} />}
+            </button>
+          </div>
+
+          {/* Auto Sign-out on screen lock / close */}
+          <div className="flex items-center justify-between py-2 border-t border-line/40">
+            <div>
+              <p className="font-medium text-sm text-ink">Strict Sign-Out on screen lock / close</p>
+              <p className="text-xs text-muted">Immediately logs out and requires re-login</p>
+            </div>
+            <button
+              onClick={() => setLogoutOnTabLeave(!logoutOnTabLeave)}
+              className={`size-6 rounded-lg border grid place-items-center transition ${
+                logoutOnTabLeave ? 'bg-brand border-brand text-white' : 'border-line bg-background'
+              }`}
+            >
+              {logoutOnTabLeave && <Check size={14} />}
             </button>
           </div>
 
